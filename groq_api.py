@@ -6,45 +6,49 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Función para consultar la API de Groq
-def consulta_api_groq(user_input, context=None):
-    url = "https://api.groq.com/openai/v1/chat/completions"
+def consulta_api_groq(prompt, context=None, modelo=None):
     api_key = os.getenv('GROQ_API_KEY')
-    
     if not api_key:
-        raise ValueError("No se encontró la clave API de Groq. Verifica tus variables de entorno.")
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-    
-    # Preparar los mensajes con contexto
+        raise ValueError("No se encontró la API key de Groq")
+
+    # URL base de la API de Groq
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    # Usar el modelo proporcionado o el predeterminado
+    modelo_a_usar = modelo if modelo else "llama3-70b-8192"
+
+    # Preparar los mensajes incluyendo el contexto si existe
     messages = []
     if context:
-        messages.extend([
-            {"role": msg["role"], "content": msg["content"]} 
-            for msg in context
-        ])
-    
-    messages.append({"role": "user", "content": user_input})
-    
-    payload = {
-        "model": "llama3-8b-8192",
+        messages.extend(context)
+    messages.append({"role": "user", "content": prompt})
+
+    # Datos para la solicitud
+    data = {
+        "model": modelo_a_usar,
         "messages": messages,
-        "temperature": 0.7,  # Ajustar creatividad
-        "max_tokens": 1000   # Ajustar longitud de respuesta
+        "temperature": 0.7,
+        "max_tokens": 2048
+    }
+
+    # Cabeceras de la solicitud
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()  # Lanzar excepción si hay error HTTP
         
-        data = response.json()
-        bot_response = data["choices"][0]["message"]["content"]
-        return bot_response.strip()
-        
-    except requests.exceptions.Timeout:
-        return "Lo siento, la solicitud ha tardado demasiado tiempo. Por favor, intenta de nuevo."
+        if response.status_code != 200:
+            print(f"Error API: {response.text}")  # Debug
+            raise Exception(f"API error: {response.status_code}")
+            
+        return response.json()['choices'][0]['message']['content']
     except requests.exceptions.RequestException as e:
-        return f"Error al consultar la API: {str(e)}"
+        print(f"Error en la solicitud: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Respuesta de la API: {e.response.text}")
+        raise Exception(f"Error al comunicarse con la API de Groq: {str(e)}")
 

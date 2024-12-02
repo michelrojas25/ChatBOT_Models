@@ -2,127 +2,175 @@ import gradio as gr
 from groq_api import consulta_api_groq
 from chat_storage import AlmacenamientoChat
 
-# Inicializamos el almacenamiento y variables globales
+# Inicializaciones
 almacenamiento = AlmacenamientoChat()
 id_conversacion_actual = None
-chat_history_global = []  # Variable global para mantener el historial
+chat_history_global = []
 
-def chat_response(user_input, history):
+# Configuración de modelos disponibles
+MODELOS_DISPONIBLES = {
+    "Meta": [
+        "llama3-8b-8192",
+        "llama-3.1-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama-3.2-1b-preview",
+        "llama-3.2-3b-preview",
+        "llama-3.2-11b-vision-preview",
+        "llama-3.2-90b-vision-preview",
+        "llama-guard-3-8b",
+        "llama3-70b-8192"
+    ],
+    "Google": [
+        "gemma-7b-it",
+        "gemma2-9b-it"
+    ],
+    "Groq": [
+        "llama3-groq-70b-8192-tool-use-preview",
+        "llama3-groq-8b-8192-tool-use-preview"
+    ],
+    "Mistral AI": [
+        "mixtral-8x7b-32768"
+    ],
+    "OpenAI": [
+        "whisper-large-v3",
+        "whisper-large-v3-turbo"
+    ],
+    "Hugging Face": [
+        "distil-whisper-large-v3-en"
+    ],
+    "Otros": [
+        "llava-v1.5-7b-4096-preview"
+    ]
+}
+
+# Función para obtener lista plana de modelos
+def get_all_models():
+    return [model for provider in MODELOS_DISPONIBLES.values() for model in provider]
+
+def chat_response(user_input, history, modelo_seleccionado):
     global id_conversacion_actual, chat_history_global
     
-    if history is None:
-        history = chat_history_global  # Usar el historial global
-        if not history:  # Si el historial está vacío, iniciar nueva conversación
-            id_conversacion_actual = almacenamiento.iniciar_conversacion("Nueva Conversación")
+    # Extraer el nombre real del modelo (eliminar el prefijo del proveedor)
+    modelo_real = modelo_seleccionado.split(" - ")[1] if " - " in modelo_seleccionado else modelo_seleccionado
     
     if not user_input.strip():
         return history, history, ""
     
     try:
+        # Obtener el contexto del historial
         context = [
             {"role": msg["role"], "content": msg["content"]} 
-            for msg in history[-4:]
+            for msg in history[-4:] if history
         ]
         
-        bot_response = consulta_api_groq(user_input, context=context)
+        # Llamar a la API con el modelo seleccionado
+        bot_response = consulta_api_groq(
+            prompt=user_input,
+            context=context,
+            modelo=modelo_real
+        )
         
-        # Guardar en la base de datos
-        almacenamiento.guardar_mensaje(id_conversacion_actual, "usuario", user_input)
-        almacenamiento.guardar_mensaje(id_conversacion_actual, "asistente", bot_response)
-        
-        # Actualizar el historial
+        # Actualizar historial
+        if history is None:
+            history = []
         history.append({"role": "user", "content": user_input})
         history.append({"role": "assistant", "content": bot_response})
-        chat_history_global = history  # Actualizar el historial global
+        chat_history_global = history
         
     except Exception as e:
-        error_message = f"Lo siento, ha ocurrido un error: {str(e)}"
+        error_message = f"Error con el modelo {modelo_real}: {str(e)}"
+        if history is None:
+            history = []
         history.append({"role": "user", "content": user_input})
         history.append({"role": "assistant", "content": error_message})
-        chat_history_global = history  # Actualizar el historial global
+        chat_history_global = history
     
     return history, history, ""
 
-def clear_history():
-    global id_conversacion_actual, chat_history_global
-    if id_conversacion_actual is not None:
-        almacenamiento.eliminar_conversacion(id_conversacion_actual)
-        id_conversacion_actual = None
-    chat_history_global = []  # Limpiar el historial global
-    return None
-
 # Interfaz
 with gr.Blocks() as chat_interface:
-    # Encabezado
+    # Layout principal con dos columnas
     with gr.Row():
-        gr.Markdown("## ¿Cómo puedo ayudarte?", elem_id="header")
-
-    # Chat
-    with gr.Row(elem_id="chat_row"):
-        chat_history = gr.Chatbot(
-            value=chat_history_global,  # Inicializar con el historial global
-            label="",
-            elem_id="chat_area",
-            height=600,
-            type="messages"
-        )
-
-    # Entrada y botones
-    with gr.Row(elem_id="input_row"):
-        with gr.Column(scale=20):
-            user_input = gr.Textbox(
-                placeholder="Envía un mensaje a tu ChatBOT",
-                show_label=False,
-                elem_id="input_box",
-                lines=3
+        # Columna izquierda (chat)
+        with gr.Column(scale=4):
+            gr.Markdown("## ¿Cómo puedo ayudarte?", elem_id="header")
+            
+            chat_history = gr.Chatbot(
+                value=chat_history_global,
+                label="",
+                elem_id="chat_area",
+                height=600,
+                type="messages"
             )
+            
+            with gr.Row():
+                user_input = gr.Textbox(
+                    placeholder="Envía un mensaje...",
+                    show_label=False,
+                    elem_id="input_box",
+                    lines=3
+                )
+                
+            with gr.Row():
+                clear_button = gr.Button("️", elem_id="clear_button")
+                send_button = gr.Button("Enviar", elem_id="send_button", variant="primary")
+        
+        # Columna derecha (selector de modelo)
         with gr.Column(scale=1):
-            send_button = gr.Button("Enviar", elem_id="send_button", variant="primary")
-            clear_button = gr.Button("🗑️", elem_id="clear_button")
+            gr.Markdown("### Modelo")
+            
+            # Dropdown con los modelos organizados por proveedor
+            modelo_selector = gr.Dropdown(
+                choices=[f"{provider} - {model}" 
+                        for provider, models in MODELOS_DISPONIBLES.items()
+                        for model in models],
+                value="Meta - llama3-70b-8192",  # Modelo por defecto
+                label="Selecciona un modelo",
+                elem_id="model_selector"
+            )
 
-    # Configurar eventos
+    # Eventos
     send_button.click(
         chat_response,
-        inputs=[user_input, gr.State(chat_history_global)],  # Pasar el historial global
+        inputs=[user_input, gr.State(chat_history_global), modelo_selector],
         outputs=[chat_history, gr.State(), user_input]
-    )
-
-    clear_button.click(
-        clear_history,
-        outputs=[chat_history]
     )
 
     user_input.submit(
         chat_response,
-        inputs=[user_input, gr.State(chat_history_global)],  # Pasar el historial global
+        inputs=[user_input, gr.State(chat_history_global), modelo_selector],
         outputs=[chat_history, gr.State(), user_input]
     )
 
-    # CSS con tema azul oscuro
+    clear_button.click(
+        lambda: ([], [], ""),
+        outputs=[chat_history, gr.State(), user_input]
+    )
+
+    # CSS actualizado para incluir el selector de modelos
     chat_interface.css = """
     body {
         margin: 0;
         padding: 0;
-        background-color: #1a237e;  /* Azul oscuro */
-    }
-    #header {
-        text-align: center;
-        color: #ffffff;
-        margin: 20px 0;
+        background-color: #1a237e;
     }
     #chat_area {
         height: 600px !important;
         border-radius: 10px;
-        background-color: #283593;  /* Azul un poco más claro */
+        background-color: #283593;
         margin: 10px 0;
-        overflow-y: auto;
     }
     #input_box {
         min-height: 60px !important;
         border-radius: 8px;
-        background-color: #283593;  /* Azul un poco más claro */
+        background-color: #283593;
         color: #ffffff;
-        margin-bottom: 10px;
+    }
+    #model_selector {
+        background-color: #283593;
+        color: #ffffff;
+        border-radius: 8px;
+        margin-top: 10px;
     }
     #send_button, #clear_button {
         height: 40px;
@@ -136,23 +184,19 @@ with gr.Blocks() as chat_interface:
         background-color: #ff4444;
         color: white;
     }
-    .gradio-container {
-        max-width: 1200px !important;
-    }
     .message {
         padding: 15px;
         margin: 5px;
         border-radius: 10px;
     }
     .user {
-        background-color: #3949ab;  /* Azul para mensajes de usuario */
+        background-color: #3949ab;
     }
     .bot {
-        background-color: #283593;  /* Azul para mensajes del bot */
+        background-color: #283593;
     }
     """
 
-# Lanzar la aplicación
 if __name__ == "__main__":
     chat_interface.launch()
 
